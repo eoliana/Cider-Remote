@@ -32,13 +32,13 @@ class LiveActivityManager {
 
         if activity != nil {
             Task {
-                await self.updateActivity(with: track)
+                await self.updateActivity(with: track, isPlaying: isPlaying)
             }
             return
         }
 
         Task {
-            let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device?.host)
+            let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device.host)
             let cont: NowPlayingLiveActivity.NowPlayingAttributes.ContentState = .init(
                 trackInfo: display,
                 isPlaying: isPlaying,
