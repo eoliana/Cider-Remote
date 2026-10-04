@@ -4,6 +4,11 @@ on:
   push:
     branches: [main, v4]
   workflow_dispatch:
+    inputs:
+      with_widget:
+        description: 'Keep the Live Activity widget extension (needs the App Group entitlement)'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -54,14 +59,23 @@ jobs:
             | tee build/xcodebuild.log
 
       - name: Assemble IPA
+        env:
+          WITH_WIDGET: ${{ inputs.with_widget }}
         run: |
           set -euo pipefail
           APP=$(find build/DD/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
           test -n "$APP"
           echo "app=$APP"
-          # Drop the widget extension: it needs the shared App Group to run, so
-          # an unsigned IPA carrying it just installs a dead PlugIn.
-          rm -rf "$APP/PlugIns"
+          if [ "$WITH_WIDGET" != "true" ]; then
+            # The widget extension shares an App Group with the app. An unsigned
+            # IPA cannot carry that entitlement, so leaving the PlugIn in just
+            # installs something that can never run. Drop it by default; build
+            # with with_widget=true if your signer provisions the app group.
+            rm -rf "$APP/PlugIns"
+            echo "widget extension removed (build with with_widget=true to keep it)"
+          else
+            echo "keeping widget extension: $(ls "$APP/PlugIns" 2>/dev/null)"
+          fi
           mkdir -p build/Payload
           rm -rf build/Payload/*.app
           cp -R "$APP" build/Payload/
