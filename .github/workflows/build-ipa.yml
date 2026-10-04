@@ -36,6 +36,10 @@ jobs:
       - name: Build unsigned (device, no signing)
         run: |
           set -o pipefail
+          # Create build/ BEFORE tee: with `set -o pipefail`, tee failing to open
+          # its log file (because derivedDataPath hasn't created the dir yet)
+          # fails the step even though xcodebuild succeeded.
+          mkdir -p build
           xcodebuild build \
             -project "Cider Remote.xcodeproj" \
             -scheme "Cider Remote" \
