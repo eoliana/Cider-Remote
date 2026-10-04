@@ -4,6 +4,7 @@ import SwiftUI
 import WidgetKit
 import ActivityKit
 import LyricsStudioKit
+import MusicKit
 
 class LiveActivityManager {
     @AppStorage("alertLiveActivity") private var alertLiveActivity: Bool = false
@@ -150,7 +151,7 @@ class LiveActivityManager {
             let resp = try await device.runAppleMusicAPI(path: "/v1/catalog/\(track.catalogId)/lyrics?extend=ttml&l=\(storefront)")
             guard let ttml = Self.extractTTML(from: resp) else { return nil }
             let xml = XMLParser(data: ttml)
-            let parsed = Parser(provider: .appleMusic)
+            let parsed = Parser(provider: .am)
             xml.delegate = parsed
             guard xml.parse() else { return nil }
             return parsed.lyrics
