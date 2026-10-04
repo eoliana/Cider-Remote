@@ -38,7 +38,7 @@ class LiveActivityManager {
         }
 
         Task {
-            let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device.host)
+            let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device?.host)
             let cont: NowPlayingLiveActivity.NowPlayingAttributes.ContentState = .init(
                 trackInfo: display,
                 isPlaying: isPlaying,
@@ -85,7 +85,7 @@ class LiveActivityManager {
     func updateActivity(with track: Track, isPlaying: Bool = true) async {
         guard let activity else { return }
 
-        let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device.host)
+        let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device?.host)
         let state: NowPlayingLiveActivity.NowPlayingAttributes.ContentState = .init(
             trackInfo: display,
             isPlaying: isPlaying,
