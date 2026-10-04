@@ -20,9 +20,6 @@ struct QueueView<Content : View>: View {
     	@State private var playedHistory: [Track] = []
     		@State private var isLoadingHistory: Bool = false
     		@State private var didTryHistory: Bool = false
-    		/// History stays hidden until the user asks for it by scrolling up or
-    		/// pull-to-refreshing, so the queue opens on "up next".
-    		@State private var isHistoryRevealed: Bool = false
 
     	@State private var librarySheet: Bool = false
 
@@ -32,28 +29,41 @@ struct QueueView<Content : View>: View {
 
     var body: some View {
         ZStack {
-            List {
-                self.header()
-                    .ciderRowOptimized()
+            ScrollViewReader { proxy in
+                List {
+                    self.header()
+                        .ciderRowOptimized()
 
-                historyView
-
-                queueView
-                    .ciderRowOptimized()
-            }
-            .contentMargins(.bottom, 20, for: .scrollContent)
-            .contentMargins(.top, 10, for: .scrollContent)
-            .ciderOptimized()
-            .refreshable {
-                // Pull-to-refresh is the "scroll up" affordance: reveal history.
-                await self.revealHistory()
+                    // One continuous timeline: already-played above, the
+                    // current track in the middle, up-next below. The list
+                    // opens scrolled to the current track, so scrolling up
+                    // walks back through history and scrolling down walks
+                    // forward through the queue. No pull-to-refresh: it
+                    // hijacked small upward drags and snapped the whole list
+                    // to the top, which made the queue unusable.
+                    timelineView
+                }
+                .contentMargins(.bottom, 20, for: .scrollContent)
+                .contentMargins(.top, 10, for: .scrollContent)
+                .ciderOptimized()
+                .onAppear {
+                    // Land in the middle of the timeline rather than at the
+                    // top of the history.
+                    if let id = currentTrack?.id {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                }
+                .onChange(of: currentTrack?.id) { _, newValue in
+                    guard let newValue else { return }
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(newValue, anchor: .center)
+                    }
+                }
             }
         }
         .foregroundStyle(.primary)
 		.task {
 			await fetchQueueItems()
-			// Fetch history up front (cheap, cached), but keep it hidden until the
-			// user scrolls up so the queue opens on "up next".
 			await loadHistoryIfNeeded()
 		}
     }
@@ -102,54 +112,83 @@ struct QueueView<Content : View>: View {
         }
     }
 
-    /// Play history. Only revealed once the user has scrolled the list up, so the
-	/// default view stays "what's coming next".
-	@ViewBuilder
-    private var historyView: some View {
+
+    /// The whole queue as one timeline: history, current track, up-next.
+    @ViewBuilder
+    private var timelineView: some View {
         if isLoadingHistory {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text("Loading history…")
+                Text("Loading queue…")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .listRowSeparator(.hidden)
-        } else if !playedHistory.isEmpty, isHistoryRevealed {
-            Section {
-                ForEach(playedHistory, id: \.id) { track in
-                    Button {
-                        Task { await playFromHistory(track) }
-                    } label: {
-                        HStack(spacing: 12) {
-                            trackRow(track, showDuration: true)
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.footnote)
-                                .foregroundStyle(.tertiary)
-                        }
+        } else {
+            // Above the current track: already played, newest first.
+            ForEach(historySection, id: \.id) { track in
+                Button {
+                    Task { await playFromHistory(track) }
+                } label: {
+                    HStack(spacing: 12) {
+                        trackRow(track, showDuration: true)
+                            .opacity(0.65)
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
                     }
-                    .buttonStyle(.ciderPressable)
                 }
-            } header: {
-                Text("Recently played")
+                .buttonStyle(.ciderPressable)
+            }
+
+            if !historySection.isEmpty {
+                Text("Now playing")
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                    .padding(.top, 8)
             }
-        } else if didTryHistory, isHistoryRevealed {
-            Text("No earlier tracks in this queue")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .listRowSeparator(.hidden)
+
+            // The pivot row: highlighted, not tappable.
+            if let current = currentTrack {
+                trackRow(current, showDuration: true)
+                    .id(current.id)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color("CiderColor").opacity(0.18))
+                            .padding(.horizontal, 12)
+                    )
+                    .overlay(alignment: .leading) {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.caption)
+                            .foregroundStyle(Color("CiderColor"))
+                            .padding(.leading, 4)
+                    }
+                    .listRowSeparator(.hidden)
+            }
+
+            if !queueItems.isEmpty {
+                Text("Up next")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                    .padding(.top, 8)
+            }
+
+            queueView
+                .ciderRowOptimized()
         }
     }
 
-    /// Reveal history on pull-to-refresh, or when the list is dragged downward.
-    private func revealHistory() async {
-        isHistoryRevealed = true
-        await loadHistoryIfNeeded()
+    /// History minus anything that is already in the up-next list, so a track
+    /// never appears twice around the pivot.
+    private var historySection: [Track] {
+        guard !playedHistory.isEmpty else { return [] }
+        let upNextIDs = Set(queueItems.map(\.id))
+        let currentID = currentTrack?.id
+        return playedHistory.filter { $0.id != currentID && !upNextIDs.contains($0.id) }
     }
 
     private func loadHistoryIfNeeded() async {

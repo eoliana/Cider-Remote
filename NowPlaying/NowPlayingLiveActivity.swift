@@ -40,7 +40,7 @@ struct NowPlayingLiveActivity: Widget {
                     .resizable()
                     .scaledToFit()
             }
-            .keylineTint(Color.cider)
+            .keylineTint(Color("CiderColor"))
         }
     }
 
@@ -115,7 +115,7 @@ struct NowPlayingLiveActivity: Widget {
                         .font(.caption2)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .foregroundStyle(Color.cider.opacity(0.9))
+                        .foregroundStyle(Color("CiderColor").opacity(0.9))
                         .transition(.opacity)
                 }
             }

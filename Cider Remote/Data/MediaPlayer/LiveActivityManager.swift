@@ -42,17 +42,25 @@ class LiveActivityManager {
             let cont: NowPlayingLiveActivity.NowPlayingAttributes.ContentState = .init(
                 trackInfo: display
             )
-            
-            if #available(iOS 16.2, *) {
-                self.lastActivity = try Activity
-                    .request(
-                        attributes: .init(device: device),
-                        content: .init(state: cont, staleDate: .now.addingTimeInterval(pow(10, 3) * 900), relevanceScore: 9.0)
-                    )
-            } else {
-                self.lastActivity = try Activity.request(attributes: .init(device: device), contentState: cont)
+
+            // Activity.request throws if Live Activities are disabled for the
+            // app, unsupported on the device, or the frequency budget is
+            // exhausted. It was previously an unhandled `try` inside a Task,
+            // so every one of those failures vanished with no log at all.
+            do {
+                if #available(iOS 16.2, *) {
+                    self.lastActivity = try Activity
+                        .request(
+                            attributes: .init(device: device),
+                            content: .init(state: cont, staleDate: .now.addingTimeInterval(pow(10, 3) * 900), relevanceScore: 9.0)
+                        )
+                } else {
+                    self.lastActivity = try Activity.request(attributes: .init(device: device), contentState: cont)
+                }
+                print("[LIVE] started activity for \(track.title)")
+            } catch {
+                print("[LIVE] Activity.request FAILED: \(error.localizedDescription)")
             }
-            print("STARTED LIVE ACTIVITY")
         }
     }
 
