@@ -19,6 +19,9 @@ struct NowPlayingBundle: WidgetBundle {
 private var Bundle18: some Widget {
     NowPlayingLiveActivity()
 
+    // Home-screen widget: art + controls + lyric line.
+    CiderNowPlayingWidget()
+
     // control center
     PlayPauseControl()
     TimeTrackControl()
@@ -27,4 +30,6 @@ private var Bundle18: some Widget {
 @WidgetBundleBuilder
 private var BundleOld: some Widget {
     NowPlayingLiveActivity()
+
+    CiderNowPlayingWidget()
 }

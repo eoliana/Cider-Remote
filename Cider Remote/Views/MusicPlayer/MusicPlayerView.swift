@@ -64,6 +64,11 @@ struct MusicPlayerView: View {
     @State private var showingQueue: Bool = false
     @State private var showingLibrary: Bool = false
 
+	/// Long-press scrubber overlay.
+	@State private var showingScrubber: Bool = false
+	@State private var scrubTime: Double = 0
+	@State private var scrubDragging: Bool = false
+
     // Error
     @State private var errorMessage: String?
 
@@ -149,8 +154,23 @@ struct MusicPlayerView: View {
             }
         }
         .onChange(of: scenePhase) { _, newValue in
-            if newValue == .active, let player {
-                player.play()
+            switch newValue {
+            case .active:
+                if let player {
+                    player.play()
+                }
+                // Coming back to the foreground: the socket was torn down while
+                // backgrounded, so the activity state is stale. Re-sync it.
+                Task { @MainActor in await self.resyncLiveActivity() }
+
+            case .background:
+                // Going to the background is the moment the activity actually
+                // matters, and socket updates stop here. Push the final state
+                // (including the active lyric line) before the app is suspended.
+                Task { @MainActor in await self.syncLiveActivityNow() }
+
+            default:
+                break
             }
         }
         .environment(\.colorScheme, ColorScheme.dark)
@@ -158,7 +178,8 @@ struct MusicPlayerView: View {
 
     @ViewBuilder
     private var portrait: some View {
-        VStack {
+        ZStack {
+            VStack {
             if expandedView {
                 artwork
                     .padding(.top, self.videoArtwork != nil ? 0.0 : 80.0)
@@ -183,9 +204,24 @@ struct MusicPlayerView: View {
             }
 
             Spacer()
+            }
+            .ignoresSafeArea(.container)
+            .frame(maxHeight: .infinity)
+
+            // Long-press scrubber sits above everything else.
+            if showingScrubber {
+                scrubberOverlay
+                    .ignoresSafeArea(.container)
+                    .transition(.opacity)
+                    // Dismiss when the finger lifts anywhere on the overlay
+                    // that is not one of the buttons or the slider.
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showingScrubber = false
+                        }
+                    }
+            }
         }
-        .ignoresSafeArea(.container)
-        .frame(maxHeight: .infinity)
         .background {
             ZStack {
                 Rectangle()
@@ -305,7 +341,16 @@ struct MusicPlayerView: View {
 
     @ViewBuilder
     private var artwork: some View {
-        if let track = self.currentTrack {
+        Group {
+            if let track = self.currentTrack {
+                artworkBody(track)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func artworkBody(_ track: Track) -> some View {
+        Group {
             if videoArtwork != nil && expandedView, let player {
                 UninteractableVideoPlayer(player: player)
                     .aspectRatio(userDevice.horizontalOrientation.isPortrait() ? LibraryAlbum.AnimatedCover.tall.ratio : LibraryAlbum.AnimatedCover.square.ratio, contentMode: .fit)
@@ -336,35 +381,66 @@ struct MusicPlayerView: View {
                         }
                     }
             } else {
-                AsyncImage(url: URL(string: track.artwork)) { phase in
-                    switch phase {
-                        case .empty:
-                            Rectangle()
-                                .fill(Color.gray.opacity(0.2))
-                                .frame(maxWidth: expandedView ? .infinity : 40, maxHeight: expandedView ? nil : 40, alignment: .center)
-                                .overlay {
-                                    ProgressView()
-                                }
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                        case .failure:
-                            Image(systemName: "music.note")
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .foregroundStyle(.gray)
-                        @unknown default:
-                            EmptyView()
-                    }
-                }
-                .scaledToFit()
-                .frame(maxWidth: expandedView ? .infinity : 40, maxHeight: expandedView ? nil : 40, alignment: .center)
-                .clipShape(RoundedRectangle(cornerRadius: expandedView ? 10 : 2))
-                .aspectRatio(1.0, contentMode: .fit)
-                .shadow(radius: expandedView ? 10 : 0)
+                // Prefer the bytes the app already downloaded (Track.artworkData
+                // is filled in updateTrackInfo). AsyncImage re-fetched the URL
+                // every time the player rebuilt, which flashed the placeholder
+                // and could fail outright behind a slow or blocked CDN.
+                artworkImage(for: track)
+                    .scaledToFit()
+                    .frame(maxWidth: expandedView ? .infinity : 40, maxHeight: expandedView ? nil : 40, alignment: .center)
+                    .clipShape(RoundedRectangle(cornerRadius: expandedView ? 10 : 2))
+                    .aspectRatio(1.0, contentMode: .fit)
+                    .shadow(radius: expandedView ? 10 : 0)
             }
         }
+        // Long-press the artwork for the scrubber. minimumDistance 0 with a
+        // 0.35s hold so it does not fire on a normal tap.
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 0.35, maximumDistance: 40) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                showingScrubber = true
+            }
+            // Seed the scrub position from the live playback position.
+            scrubTime = currentTime
+        } onPressingChanged: { pressing in
+            // Track the finger for the press-scale, then dismiss on release.
+            withAnimation(.easeOut(duration: 0.15)) {
+                scrubDragging = pressing
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func artworkImage(for track: Track) -> some View {
+        if let data: Data = track.artworkData.isEmpty ? nil : track.artworkData,
+           let ui: UIImage = UIImage(data: data) {
+            Image(uiImage: ui)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else if !track.artwork.isEmpty {
+            AsyncImage(url: URL(string: track.artwork)) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().aspectRatio(contentMode: .fill)
+                case .failure:
+                    artworkPlaceholder
+                default:
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.2))
+                        .overlay { ProgressView() }
+                }
+            }
+        } else {
+            artworkPlaceholder
+        }
+    }
+
+    private var artworkPlaceholder: some View {
+        Image(systemName: "music.note")
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .padding(expandedView ? 24 : 6)
+            .foregroundStyle(.gray)
     }
 
     @ViewBuilder
@@ -410,6 +486,80 @@ struct MusicPlayerView: View {
                 }
             }
         }
+    }
+
+    /// Long-press the artwork for a large scrubber plus transport controls.
+    private var scrubberOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.92)
+
+            VStack(spacing: 22) {
+                Text(self.currentTrack?.title ?? "")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+
+                Text(self.currentTrack?.artist ?? "")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+
+                VStack(spacing: 6) {
+                    CustomSlider(value: $scrubTime, isDragging: $scrubDragging, bounds: 0...max(duration, 1)) { editing in
+                        if !editing {
+                            // Commit the scrub on release.
+                            Task { await self.seekToTime(to: self.scrubTime) }
+                        }
+                    }
+
+                    HStack {
+                        Text(self.formatTime(self.scrubTime))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text("-" + self.formatTime(max(0, duration - scrubTime)))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                .padding(.horizontal, 8)
+
+                HStack(spacing: 46) {
+                    Button {
+                        Task { await self.previousTrack() }
+                    } label: {
+                        Image(systemName: "backward.fill")
+                            .font(.title.bold())
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.ciderTransport)
+
+                    Button {
+                        Task { await self.togglePlayPause() }
+                    } label: {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 46, height: 46)
+                            .foregroundStyle(.white)
+                            .contentTransition(.symbolEffect(.replace.wholeSymbol))
+                    }
+                    .buttonStyle(.ciderTransport)
+
+                    Button {
+                        Task { await self.nextTrack() }
+                    } label: {
+                        Image(systemName: "forward.fill")
+                            .font(.title.bold())
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.ciderTransport)
+                }
+            }
+            .padding(28)
+        }
+        .transition(.opacity)
     }
 
     @ViewBuilder
@@ -638,6 +788,78 @@ struct MusicPlayerView: View {
         UIApplication.shared.isIdleTimerDisabled = bool
         print("always-\(bool ? "on" : "off")")
 #endif
+    }
+
+    /// Push the current track + lyric line into the activity. Called on every
+    /// playback tick, and once more when the app is backgrounded (the socket
+    /// stops delivering events at that point, so this is the last update the
+    /// activity will get).
+    private func syncLiveActivityNow() async {
+        guard let track = self.currentTrack else { return }
+        self.liveActivity.startActivity(using: track)
+        await self.liveActivity.syncLyricLine(track: track, at: self.currentTime)
+        publishToWidget()
+    }
+
+    /// Publish the now-playing snapshot for the home-screen widget, including
+    /// the active lyric line. Reloading timelines is rate-limited by the
+    /// system, so the reload is skipped when the active line has not moved.
+    private func publishToWidget() {
+        let line: String? = self.liveActivity.activeLyric(for: self.currentTrack?.id ?? "", at: self.currentTime)
+
+        let snapshot = SharedNowPlaying(
+            title: self.currentTrack?.title ?? "",
+            artist: self.currentTrack?.artist ?? "",
+            album: self.currentTrack?.album ?? "",
+            artworkURL: self.currentTrack?.artwork,
+            lyricLine: line,
+            isPlaying: self.isPlaying,
+            deviceName: self.device.friendlyName,
+            connectionMethod: self.device.connectionMethod.rawValue,
+            host: self.device.host,
+            token: self.device.token,
+            apiVersion: self.device.useV2 ? "v2" : "v1"
+        )
+
+        let changed: Bool = {
+            let old = SharedNowPlaying.load()
+            return old.title != snapshot.title
+                || old.isPlaying != snapshot.isPlaying
+                || old.lyricLine != snapshot.lyricLine
+        }()
+
+        snapshot.save()
+
+        if changed {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
+
+    /// Clear the widget when playback stops, so it does not show a stale song.
+    private func clearWidget() {
+        SharedNowPlaying.clear()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// Re-establish the activity after returning to the foreground: fetch the
+    /// real now-playing from the server (the socket missed events while
+    /// backgrounded), then restart or update the activity to match.
+    private func resyncLiveActivity() async {
+        print("[LIVE] resync on foreground")
+        await self.getCurrentTrack()
+
+        guard let track = self.currentTrack else {
+            // No track playing: tear down both surfaces so neither sits on the
+            // lock screen / home screen showing a stale song.
+            self.liveActivity.stopActivity()
+            self.clearWidget()
+            return
+        }
+
+        self.liveActivity.prepareLyrics(for: track, device: self.device)
+        self.liveActivity.startActivity(using: track)
+        await self.liveActivity.syncLyricLine(track: track, at: self.currentTime)
+        self.publishToWidget()
     }
 
     // MARK: - Model
@@ -1048,21 +1270,31 @@ struct MusicPlayerView: View {
     }
 
     /// Rewind behaviour, matching Apple Music:
-	///   - more than `rewindThreshold` seconds in  -> restart this track
-	///   - within the threshold, first press       -> restart this track
-	///   - within the threshold, second press      -> previous track
+	///   - more than `rewindThreshold` seconds in -> jump back ~15s
+	///   - within the threshold                   -> restart the track
+	///   - a second press while near the start    -> previous track
 	///
 	/// The latch is what makes the third case reachable. Without it, seeking to
 	/// 0 leaves `currentTime` under the threshold, so every further press just
 	/// seeked to 0 again and the previous track was unreachable.
 	private static let rewindThreshold: Double = 3.0
+	private static let rewindJump: Double = 15.0
 
     func previousTrack() async {
         print("Going to previous track")
 
-		// Past the threshold, or already used up the "restart" press: go back a
-		// track.
-		if currentTime >= Self.rewindThreshold || didRewindAtStart {
+		// Past the threshold: rewind within the track. This is what makes the
+		// button reliably "go back" instead of skipping the whole song.
+		if currentTime >= Self.rewindThreshold {
+			didRewindAtStart = false
+			let target: Double = max(0, currentTime - Self.rewindJump)
+			await seekToTime(to: target)
+			self.currentTime = target
+			return
+		}
+
+		// Near the start, and already restarted once: go to the previous track.
+		if didRewindAtStart {
 			didRewindAtStart = false
 			do {
 				_ = try await sendRequest(endpoint: "playback/previous", method: "POST")
@@ -1133,19 +1365,17 @@ struct MusicPlayerView: View {
 
     func togglePlayPause() async {
         print("Toggling play/pause")
-        withAnimation {
-            isPlaying.toggle() // Immediately update UI
-        }
+        // Do NOT flip `isPlaying` optimistically here. The socket emits
+        // playbackStatus.playbackStateDidChange moments later and setPlaybackStatus
+        // sets it again, so an optimistic toggle animated twice (play -> pause ->
+        // play) and read as the button stuttering. Let the server be the truth.
         do {
 			let path: String = device.useV2 ? "playback/toggle" : "playback/playpause"
             _ = try await sendRequest(endpoint: path, method: "POST")
-            // Server confirmed the change, no need to update UI again
             if #available(iOS 18.0, *) {
                 ControlCenter.shared.reloadControls(ofKind: "sh.cider.CiderRemote.PlayPauseControl")
             }
         } catch {
-            // Revert the UI change if the server request failed
-            isPlaying.toggle()
             handleError(error)
         }
     }

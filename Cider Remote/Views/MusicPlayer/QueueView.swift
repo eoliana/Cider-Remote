@@ -47,16 +47,17 @@ struct QueueView<Content : View>: View {
                 .contentMargins(.top, 10, for: .scrollContent)
                 .ciderOptimized()
                 .onAppear {
-                    // Land in the middle of the timeline rather than at the
-                    // top of the history.
+                    // Open with "Now playing" at the top of the viewport, so
+                    // scrolling UP walks back through the actual play history
+                    // and scrolling down reveals what is queued next.
                     if let id = currentTrack?.id {
-                        proxy.scrollTo(id, anchor: .center)
+                        proxy.scrollTo(id, anchor: .top)
                     }
                 }
                 .onChange(of: currentTrack?.id) { _, newValue in
                     guard let newValue else { return }
                     withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(newValue, anchor: .center)
+                        proxy.scrollTo(newValue, anchor: .top)
                     }
                 }
             }
