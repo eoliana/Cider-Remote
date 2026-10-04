@@ -796,7 +796,7 @@ struct MusicPlayerView: View {
     /// activity will get).
     private func syncLiveActivityNow() async {
         guard let track = self.currentTrack else { return }
-        self.liveActivity.startActivity(using: track)
+        self.liveActivity.startActivity(using: track, isPlaying: self.isPlaying)
         await self.liveActivity.syncLyricLine(track: track, at: self.currentTime)
         publishToWidget()
     }
@@ -857,7 +857,7 @@ struct MusicPlayerView: View {
         }
 
         self.liveActivity.prepareLyrics(for: track, device: self.device)
-        self.liveActivity.startActivity(using: track)
+        self.liveActivity.startActivity(using: track, isPlaying: self.isPlaying)
         await self.liveActivity.syncLyricLine(track: track, at: self.currentTime)
         self.publishToWidget()
     }
@@ -882,7 +882,7 @@ struct MusicPlayerView: View {
                 await self.getCurrentTrack()
 
                 if let currentTrack = self.currentTrack {
-                    self.liveActivity.startActivity(using: currentTrack)
+                    self.liveActivity.startActivity(using: currentTrack, isPlaying: self.isPlaying)
                 }
 
 //                AppDelegate.shared.scheduleAppRefresh()
@@ -909,7 +909,7 @@ struct MusicPlayerView: View {
                             self.updateTrackInfo(info)
                             self.didRewindAtStart = false
                             if let currentTrack = self.currentTrack {
-                                self.liveActivity.startActivity(using: currentTrack)
+                                self.liveActivity.startActivity(using: currentTrack, isPlaying: self.isPlaying)
                                 self.liveActivity.prepareLyrics(for: currentTrack, device: self.device)
                             }
                         }

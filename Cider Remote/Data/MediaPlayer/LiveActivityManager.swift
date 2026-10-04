@@ -27,7 +27,7 @@ class LiveActivityManager {
         return Activity<NowPlayingLiveActivity.NowPlayingAttributes>.activities.first
     }
 
-    func startActivity(using track: Track) {
+    func startActivity(using track: Track, isPlaying: Bool = true) {
         guard let device else { return }
 
         if activity != nil {
@@ -38,9 +38,12 @@ class LiveActivityManager {
         }
 
         Task {
-            let display: DisplayingTrack = Self.DisplayingTrack(from: track)
+            let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device.host)
             let cont: NowPlayingLiveActivity.NowPlayingAttributes.ContentState = .init(
-                trackInfo: display
+                trackInfo: display,
+                isPlaying: isPlaying,
+                startTime: Date(),
+                duration: track.duration
             )
 
             // Activity.request throws if Live Activities are disabled for the
@@ -79,12 +82,15 @@ class LiveActivityManager {
         print("UPDATED1 LIVE ACTIVITY")
     }
 
-    func updateActivity(with track: Track) async {
+    func updateActivity(with track: Track, isPlaying: Bool = true) async {
         guard let activity else { return }
 
-        let display: DisplayingTrack = Self.DisplayingTrack(from: track)
+        let display: DisplayingTrack = Self.DisplayingTrack(from: track, host: device.host)
         let state: NowPlayingLiveActivity.NowPlayingAttributes.ContentState = .init(
-            trackInfo: display
+            trackInfo: display,
+            isPlaying: isPlaying,
+            startTime: Date(),
+            duration: track.duration
         )
 
         await activity
@@ -223,14 +229,40 @@ class LiveActivityManager {
             self.artworkData = nil
         }
 
-        init(from track: Track) {
+        init(from track: Track, host: String? = nil) {
             self.id = track.id
             self.title = track.title
             self.artist = track.artist
             self.album = track.album
-            self.artworkURL = URL(string: track.artwork)
+            // Cider hands back artwork paths that are sometimes relative to the
+            // Cider host. URL(string:) happily accepts "/foo.jpg", which then
+            // fails to load in the extension (it has no server base URL), so
+            // resolve against the device host before it is encoded into the
+            // activity's content state.
+            self.artworkURL = Self.resolveArtwork(track.artwork, host: host)
             self.lyricLine = nil
-            self.artworkData = track.artworkData.isEmpty ? nil : track.artworkData
+            // Deliberately NOT inlining the bytes: ActivityKit content states
+            // have a hard size cap, and an album image blows straight through
+            // it, which made the whole update silently fail and left the
+            // activity rendering an empty state.
+            self.artworkData = nil
+        }
+
+        static func resolveArtwork(_ raw: String, host: String?) -> URL? {
+            guard !raw.isEmpty else { return nil }
+            if let absolute = URL(string: raw), absolute.scheme != nil {
+                return absolute
+            }
+            guard let host, !host.isEmpty else { return nil }
+
+            // Strip any trailing "/api/v2" the stored host may carry.
+            var base = host
+            for suffix in ["/api/v2", "/api/v1", "/"] where base.hasSuffix(suffix) {
+                base = String(base.dropLast(suffix.count))
+            }
+            guard var components = URLComponents(string: base) else { return nil }
+            components.path = raw.hasPrefix("/") ? raw : "/" + raw
+            return components.url
         }
 
         func getArtworkData() async -> Data? {
