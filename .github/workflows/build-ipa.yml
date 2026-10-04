@@ -77,21 +77,30 @@ jobs:
           MAIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$BIN/Info.plist")
           echo "bundle=$BIN main=$MAIN"
           test -f "$BIN/$MAIN"
-          # Cider-4 transport markers. These are the strings that only exist in
-          # the v4 branch: /api/v2 prefix + the v2 REST verbs + amapi/run-v3.
-          # If they are missing the build silently shipped the v2.x app.
+          # Cider-4 transport markers: literal strings that exist ONLY on the v4
+          # branch. I derived this list with:
+          #   comm -23 <v4 strings> <main strings>
+          # so a hit here proves the v4 code compiled in, and a miss means
+          # we silently shipped the old v2.x app.
+          #
+          # Every marker must be >= ~16 bytes. Swift stores literals of about
+          # 16 bytes or fewer as instruction immediates rather than in
+          # __cstring, so `strings` legitimately misses short ones
+          # ("apptoken", "amapi/run-v3") even in a perfect build.
           MISSING=0
-          for s in "amapi/run-v3" "playback/play-href" "playback/add-later" "/api/" "apptoken" ; do
+          for s in "queue/position" "playback/shuffle/toggle" "playback/repeat/toggle" \
+                   "playback/add-later" "playback/play-href" "library/now-playing/rating" ; do
             N=$(strings -a "$BIN/$MAIN" | grep -c -- "$s" || true)
-            printf '%-24s %s\n' "$s" "$N"
+            printf '%-30s %s\n' "$s" "$N"
             [ "$N" -gt 0 ] || MISSING=1
           done
           if [ "$MISSING" -ne 0 ]; then
             echo "::error::v4 transport markers missing from the built binary"
             exit 1
           fi
-          # Prove it is NOT the old v2.x app: the v1-only endpoints must be gone.
-          echo "--- legacy v1 endpoints (expected 0 on a v4 build) ---"
+          echo "--- legacy v1 endpoints still compiled in (expected >0: the"
+          echo "--- useV2 ternaries keep both branches, so their presence"
+          echo "--- proves nothing about version) ---"
           for s in "playback/play-item-href" "playback/queue/clear-queue" "playback/play-later" ; do
             printf '%-30s %s\n' "$s" "$(strings -a "$BIN/$MAIN" | grep -c -- "$s" || true)"
           done
