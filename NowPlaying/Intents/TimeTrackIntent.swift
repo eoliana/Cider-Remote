@@ -28,9 +28,7 @@ struct TimeTrackIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult {
-//		let path: String = device.useV2 ? "playback/state" : "playback/active"
-//        let (statusCode, _) = await device.sendRequest(endpoint: path)
-		let (statusCode, _) = await device.sendRequest(endpoint: "playback/active")
+        let (statusCode, _) = await device.sendRequest(endpoint: CiderAPI.reachabilityProbe(for: device))
 
         if statusCode == 200 {
             var req: String = "playback/unknown"
