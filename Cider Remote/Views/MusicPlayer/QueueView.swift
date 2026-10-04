@@ -18,8 +18,11 @@ struct QueueView<Content : View>: View {
     	/// Already-played tracks, newest first. Empty until the user scrolls the
     	/// list up past the top of the queue.
     	@State private var playedHistory: [Track] = []
-    	@State private var isLoadingHistory: Bool = false
-    	@State private var didTryHistory: Bool = false
+    		@State private var isLoadingHistory: Bool = false
+    		@State private var didTryHistory: Bool = false
+    		/// History stays hidden until the user asks for it by scrolling up or
+    		/// pull-to-refreshing, so the queue opens on "up next".
+    		@State private var isHistoryRevealed: Bool = false
 
     	@State private var librarySheet: Bool = false
 
@@ -42,15 +45,15 @@ struct QueueView<Content : View>: View {
             .contentMargins(.top, 10, for: .scrollContent)
             .ciderOptimized()
             .refreshable {
-                // Pull-to-refresh on the queue doubles as "reload history".
-                await self.loadHistoryIfNeeded()
+                // Pull-to-refresh is the "scroll up" affordance: reveal history.
+                await self.revealHistory()
             }
         }
         .foregroundStyle(.primary)
 		.task {
 			await fetchQueueItems()
-			// Proactively load history so scrolling up shows it immediately
-			// rather than needing a pull-to-refresh first.
+			// Fetch history up front (cheap, cached), but keep it hidden until the
+			// user scrolls up so the queue opens on "up next".
 			await loadHistoryIfNeeded()
 		}
     }
@@ -99,8 +102,9 @@ struct QueueView<Content : View>: View {
         }
     }
 
-    /// Play history, revealed by scrolling up past the top of the queue.
-    @ViewBuilder
+    /// Play history. Only revealed once the user has scrolled the list up, so the
+	/// default view stays "what's coming next".
+	@ViewBuilder
     private var historyView: some View {
         if isLoadingHistory {
             HStack(spacing: 10) {
@@ -112,7 +116,7 @@ struct QueueView<Content : View>: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .listRowSeparator(.hidden)
-        } else if !playedHistory.isEmpty {
+        } else if !playedHistory.isEmpty, isHistoryRevealed {
             Section {
                 ForEach(playedHistory, id: \.id) { track in
                     Button {
@@ -125,14 +129,14 @@ struct QueueView<Content : View>: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                    .buttonStyle(CiderPressableButtonStyle())
+                    .buttonStyle(.ciderPressable)
                 }
             } header: {
                 Text("Recently played")
                     .font(.footnote.bold())
                     .foregroundStyle(.secondary)
             }
-        } else if didTryHistory {
+        } else if didTryHistory, isHistoryRevealed {
             Text("No earlier tracks in this queue")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
@@ -140,6 +144,12 @@ struct QueueView<Content : View>: View {
                 .padding(.vertical, 14)
                 .listRowSeparator(.hidden)
         }
+    }
+
+    /// Reveal history on pull-to-refresh, or when the list is dragged downward.
+    private func revealHistory() async {
+        isHistoryRevealed = true
+        await loadHistoryIfNeeded()
     }
 
     private func loadHistoryIfNeeded() async {

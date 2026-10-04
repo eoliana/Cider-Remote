@@ -28,6 +28,10 @@ struct MusicPlayerView: View {
 
     // Queue & Playing
     @State private var hasPlayed = false
+
+	/// True once rewind has restarted the current track. The next press is
+	/// then treated as "go to previous track". Cleared when the track changes.
+	@State private var didRewindAtStart: Bool = false
     @State private var queueItems: [Track] = []
     @State private var sourceQueue: Queue?
     @State private var currentTrack: Track?
@@ -681,6 +685,7 @@ struct MusicPlayerView: View {
                     case "playbackStatus.nowPlayingItemDidChange":
                         if let info = playbackData["data"] as? [String: Any] {
                             self.updateTrackInfo(info)
+                            self.didRewindAtStart = false
                             if let currentTrack = self.currentTrack {
                                 self.liveActivity.startActivity(using: currentTrack)
                                 self.liveActivity.prepareLyrics(for: currentTrack, device: self.device)
@@ -1042,29 +1047,36 @@ struct MusicPlayerView: View {
         }
     }
 
-    /// Rewind behaviour: within the first few seconds, go back to the start of the
-	/// track; after that, jump to the previous track. Matches Apple Music and
-	/// every other music player. Previously this always called
-	/// `playback/previous`, so tapping it a second into a song skipped the whole
-	/// song instead of restarting it.
+    /// Rewind behaviour, matching Apple Music:
+	///   - more than `rewindThreshold` seconds in  -> restart this track
+	///   - within the threshold, first press       -> restart this track
+	///   - within the threshold, second press      -> previous track
+	///
+	/// The latch is what makes the third case reachable. Without it, seeking to
+	/// 0 leaves `currentTime` under the threshold, so every further press just
+	/// seeked to 0 again and the previous track was unreachable.
 	private static let rewindThreshold: Double = 3.0
 
     func previousTrack() async {
         print("Going to previous track")
 
-		// Less than the threshold in: restart the current track.
-		if currentTime < Self.rewindThreshold {
-			await seekToTime(to: 0)
-			self.currentTime = 0
+		// Past the threshold, or already used up the "restart" press: go back a
+		// track.
+		if currentTime >= Self.rewindThreshold || didRewindAtStart {
+			didRewindAtStart = false
+			do {
+				_ = try await sendRequest(endpoint: "playback/previous", method: "POST")
+				await getCurrentTrack()
+			} catch {
+				handleError(error)
+			}
 			return
 		}
 
-        do {
-            _ = try await sendRequest(endpoint: "playback/previous", method: "POST")
-            await getCurrentTrack() // Refresh track info after going to previous track
-        } catch {
-            handleError(error)
-        }
+		// First press near the start of the track: restart it.
+		didRewindAtStart = true
+		await seekToTime(to: 0)
+		self.currentTime = 0
     }
 
     func seekToTime() async {

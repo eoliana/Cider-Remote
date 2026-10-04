@@ -60,7 +60,11 @@ jobs:
 
       - name: Assemble IPA
         env:
-          WITH_WIDGET: ${{ inputs.with_widget }}
+          # `inputs.*` is EMPTY on a push event, so a bare
+          # `[ "$WITH_WIDGET" != "true" ]` stripped the widget on every
+          # automatic build. Default to keeping it; only an explicit "false"
+          # from workflow_dispatch drops it.
+          WITH_WIDGET: ${{ inputs.with_widget == false && 'false' || 'true' }}
         run: |
           set -euo pipefail
           APP=$(find build/DD/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
