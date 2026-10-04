@@ -60,21 +60,22 @@ jobs:
 
       - name: Assemble IPA
         env:
-          # `inputs.*` is EMPTY on a push event, so a bare
-          # `[ "$WITH_WIDGET" != "true" ]` stripped the widget on every
-          # automatic build. Default to keeping it; only an explicit "false"
-          # from workflow_dispatch drops it.
-          WITH_WIDGET: ${{ inputs.with_widget == false && 'false' || 'true' }}
+          # `inputs.with_widget` is EMPTY on a push event, and the
+          # `&&/||` idiom still evaluated to 'false' there, so the strip ran
+          # on every automatic build. Use an explicit shell default instead:
+          # only a deliberate "false" drops the widget.
+          WITH_WIDGET: ${{ inputs.with_widget }}
         run: |
           set -euo pipefail
           APP=$(find build/DD/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
           test -n "$APP"
           echo "app=$APP"
-          if [ "$WITH_WIDGET" != "true" ]; then
-            # with_widget=false drops the extension for signers that cannot
-            # provision the App Group.
+          # Default to keeping the widget; strip only on explicit false.
+          KEEP_WIDGET="${WITH_WIDGET:-true}"
+          echo "WITH_WIDGET='$WITH_WIDGET' -> KEEP_WIDGET=$KEEP_WIDGET"
+          if [ "$KEEP_WIDGET" = "false" ]; then
             rm -rf "$APP/PlugIns"
-            echo "widget extension removed (build with with_widget=true to keep it)"
+            echo "widget extension removed (with_widget=false)"
           else
             echo "keeping widget extension: $(ls "$APP/PlugIns" 2>/dev/null)"
           fi
@@ -93,6 +94,16 @@ jobs:
           MAIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$BIN/Info.plist")
           echo "bundle=$BIN main=$MAIN"
           test -f "$BIN/$MAIN"
+
+          # Gate: the Live Activity widget MUST be in the payload. Two earlier
+          # builds shipped without it (a shell default that ate the extension)
+          # and it fails silently on device, so assert it here.
+          if ! find verify/Payload -maxdepth 3 -name '*.appex' | grep -q .; then
+            echo "::error::no .appex in the IPA - Live Activity/widget would be missing"
+            find verify/Payload -maxdepth 2 -type d | sed 's/^/  /'
+            exit 1
+          fi
+          echo "appex: $(find verify/Payload -maxdepth 3 -name '*.appex')"
           # Cider-4 transport markers: literal strings that exist ONLY on the v4
           # branch. I derived this list with:
           #   comm -23 <v4 strings> <main strings>
