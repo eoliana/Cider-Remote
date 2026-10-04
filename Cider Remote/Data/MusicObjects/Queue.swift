@@ -36,7 +36,7 @@ struct Queue {
 
 	/// Use only for v2, fetches the `offset` from `GET /queue/position`, then fetches all tracks using `offset` query in `GET /queue`
 	mutating func fetchCurrent(device: Device, fetchQueue: Bool = true) async throws {
-		guard device.useV2 else { throw NetworkError.invalidURL }
+        guard device.useV2 else { throw NetworkError.invalidURL }
 
 		guard let reqRes: [String: Any] = try await device.sendRequest(endpoint: "queue/position") as? [String: Any] else { throw NetworkError.invalidResponse }
 		let data: Data = try JSONSerialization.data(withJSONObject: reqRes)
@@ -59,6 +59,40 @@ struct Queue {
 			let fx = self.tracks[pos.position + 1...max(self.tracks.count - 1, pos.position + 1)]
 			self.tracks = Array(fx)
 		}
+	}
+
+    /// Already-played tracks, newest first.
+	///
+	/// Cider 4's v2 API has no dedicated history endpoint, but `GET /queue`
+	/// accepts an `offset`, and `GET /queue/position` reports the current
+	/// index into that same list. So the tracks *before* the current position
+	/// are exactly the play history. `fetchCurrent` only ever asked for
+	/// `offset: position + 1`, which is why scrolling up showed nothing.
+	func fetchHistory(device: Device, limit: Int = 50) async throws -> [Track] {
+		guard device.useV2 else { return [] }
+
+		guard let posRes: [String: Any] = try await device.sendRequest(endpoint: "queue/position") as? [String: Any] else {
+			throw NetworkError.invalidResponse
+		}
+		let posData: Data = try JSONSerialization.data(withJSONObject: posRes)
+		let pos = try JSONDecoder().decode(QueuePosition.self, from: posData)
+
+		// Nothing has been played yet in this queue.
+		guard pos.position > 0 else { return [] }
+
+		let wanted: Int = min(pos.position, limit)
+		let start: Int = pos.position - wanted
+
+		guard let res: [String: Any] = try await device.sendRequest(
+			endpoint: "queue",
+			queries: [.init(name: "limit", value: "\(wanted)"), .init(name: "offset", value: "\(start)")]
+		) as? [String: Any] else { throw NetworkError.invalidResponse }
+
+		guard let items: [[String: Any]] = res["items"] as? [[String: Any]] else { return [] }
+
+		let history: [Track] = items.compactMap { getTrack(using: $0) }
+		// Oldest first on the wire; the UI shows newest at the top.
+		return Array(history.reversed())
 	}
 
     mutating func remove(set: IndexSet) {

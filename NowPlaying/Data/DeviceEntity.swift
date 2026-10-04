@@ -9,6 +9,9 @@ struct DeviceEntity: Identifiable, Codable, AppEntity {
     let token: String
     let host: String
     let connectionMethod: String
+    /// "v2" for Cider 4+, "v1" for older clients. Persisted by the host app
+    /// alongside the device so the extension does not have to probe.
+    var apiVersion: String
     var isActive: Bool
     var isPlaying: Bool
 
@@ -18,6 +21,7 @@ struct DeviceEntity: Identifiable, Codable, AppEntity {
         token: String,
         host: String,
         connectionMethod: String = "lan",
+        apiVersion: String = "v2",
         isActive: Bool = false,
         isPlaying: Bool = false
     ) {
@@ -26,6 +30,7 @@ struct DeviceEntity: Identifiable, Codable, AppEntity {
         self.token = token
         self.host = host
         self.connectionMethod = connectionMethod
+        self.apiVersion = apiVersion
         self.isActive = isActive
         self.isPlaying = isPlaying
     }
@@ -36,8 +41,9 @@ struct DeviceEntity: Identifiable, Codable, AppEntity {
         self.token = device.token
         self.host = device.host
 		self.connectionMethod = device.connectionMethod.rawValue
-        self.isActive = device.isActive
-        self.isPlaying = false
+        self.apiVersion = device.useV2 ? "v2" : "v1"
+		self.isActive = device.isActive
+		self.isPlaying = false
     }
 
     static var defaultQuery: DeviceQuery = .init()
@@ -52,7 +58,11 @@ struct DeviceEntity: Identifiable, Codable, AppEntity {
         let baseURL = self.connectionMethod == "tunnel"
         ? "https://\(self.host)"
         : "http://\(self.host):10767"
-        guard let url = URL(string: "\(baseURL)/api/v1/\(endpoint)") else {
+        // Cider 4 serves the v2 API; v1 was removed. This extension was still
+        // hardcoded to /api/v1/, so every Live Activity button (play/pause,
+        // skip, Control Center controls) silently failed with a 404.
+        let apiVersion: String = self.apiVersion
+        guard let url = URL(string: "\(baseURL)/api/\(apiVersion)/\(endpoint)") else {
             return (statusCode: -1, response: -1)
         }
 

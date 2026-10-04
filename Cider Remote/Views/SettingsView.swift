@@ -10,6 +10,9 @@ struct SettingsView: View {
     @AppStorage("alwaysOn") private var alwaysOn: Bool = false
     @AppStorage("alertLiveActivity") private var alertLiveActivity: Bool = false
 
+	/// Sideloaded build: mirror the current lyric line into the Live Activity.
+	@AppStorage("liveActivityLyrics") private var liveActivityLyrics: Bool = true
+
     // devices
     @AppStorage("deviceDetails") private var deviceDetails: Bool = false
     @AppStorage("refreshInterval") private var refreshInterval: Double = 10.0
@@ -46,6 +49,15 @@ struct SettingsView: View {
                             unstablePill
 
                             Text("Playback Notification")
+                        }
+                    }
+
+                    Toggle(isOn: $liveActivityLyrics) {
+                        VStack(alignment: .leading, spacing: 2.0) {
+                            Text("Lyrics in Live Activity")
+                            Text("Show the current line under the artist")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }

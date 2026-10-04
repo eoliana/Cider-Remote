@@ -8,7 +8,7 @@ on:
       with_widget:
         description: 'Keep the Live Activity widget extension (needs the App Group entitlement)'
         type: boolean
-        default: false
+        default: true
 
 jobs:
   build:
@@ -67,10 +67,8 @@ jobs:
           test -n "$APP"
           echo "app=$APP"
           if [ "$WITH_WIDGET" != "true" ]; then
-            # The widget extension shares an App Group with the app. An unsigned
-            # IPA cannot carry that entitlement, so leaving the PlugIn in just
-            # installs something that can never run. Drop it by default; build
-            # with with_widget=true if your signer provisions the app group.
+            # with_widget=false drops the extension for signers that cannot
+            # provision the App Group.
             rm -rf "$APP/PlugIns"
             echo "widget extension removed (build with with_widget=true to keep it)"
           else

@@ -66,6 +66,8 @@
 				AppIcon.icon,
 				Cider_RemoteApp.swift,
 				"Preview Content/Preview Assets.xcassets",
+				"Extensions/UserDefaults+Extension.swift",
+				"Components/ButtonStyles.swift",
 			);
 			target = B9CDA8392CC686AA00FBF580 /* NowPlayingExtension */;
 		};

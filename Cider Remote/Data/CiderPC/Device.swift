@@ -216,6 +216,31 @@ extension Device {
         }
     }
 
+	/// Absolute index of a track within the server-side queue, counting from
+	/// the start of the queue (including already-played entries). Used to jump
+	/// backwards into history, which needs a real index, not a relative offset.
+	func queueIndex(of track: Track) async throws -> Int {
+		guard useV2 else {
+			// v1 returns the whole queue, so the index is the position in it.
+			guard let data = try await sendRequest(endpoint: "playback/queue") as? [[String: Any]] else {
+				throw NetworkError.invalidResponse
+			}
+			let attributes: [[String: Any]] = data.compactMap { $0["attributes"] as? [String: Any] }
+			return attributes.firstIndex { ($0["playParams"] as? [String: Any])?["id"] as? String == track.id } ?? -1
+		}
+
+		guard let res: [String: Any] = try await sendRequest(
+			endpoint: "queue",
+			queries: [.init(name: "limit", value: "500"), .init(name: "offset", value: "0")]
+		) as? [String: Any] else { throw NetworkError.invalidResponse }
+
+		guard let items: [[String: Any]] = res["items"] as? [[String: Any]] else { return -1 }
+
+		return items.firstIndex { info in
+			((info["track"] as? [String: Any])?["id"] as? String) == track.id
+		} ?? -1
+	}
+
 	func sendForData<ResponseData: Decodable>(endpoint: String, method: String = "GET", body: [String: Any]? = nil, queries: [URLQueryItem] = [], version: String? = nil) async throws -> APIResponse<ResponseData, ResponseData> {
 		guard let res: [String: Any] = try await self.sendRequest(
 			endpoint: endpoint,

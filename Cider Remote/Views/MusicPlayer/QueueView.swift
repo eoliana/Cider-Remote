@@ -13,9 +13,15 @@ struct QueueView<Content : View>: View {
     @Binding var currentTrack: Track?
 
     @State private var tappedTrack: Track? = nil
-    @State private var fetchingResults: Bool = false
+        @State private var fetchingResults: Bool = false
 
-    @State private var librarySheet: Bool = false
+    	/// Already-played tracks, newest first. Empty until the user scrolls the
+    	/// list up past the top of the queue.
+    	@State private var playedHistory: [Track] = []
+    	@State private var isLoadingHistory: Bool = false
+    	@State private var didTryHistory: Bool = false
+
+    	@State private var librarySheet: Bool = false
 
     @FocusState private var isSearching: Bool
 
@@ -27,16 +33,25 @@ struct QueueView<Content : View>: View {
                 self.header()
                     .ciderRowOptimized()
 
+                historyView
+
                 queueView
                     .ciderRowOptimized()
             }
             .contentMargins(.bottom, 20, for: .scrollContent)
             .contentMargins(.top, 10, for: .scrollContent)
             .ciderOptimized()
+            .refreshable {
+                // Pull-to-refresh on the queue doubles as "reload history".
+                await self.loadHistoryIfNeeded()
+            }
         }
         .foregroundStyle(.primary)
 		.task {
 			await fetchQueueItems()
+			// Proactively load history so scrolling up shows it immediately
+			// rather than needing a pull-to-refresh first.
+			await loadHistoryIfNeeded()
 		}
     }
 
@@ -81,6 +96,77 @@ struct QueueView<Content : View>: View {
                     await self.moveQueue(from: firstIndex, to: to)
                 }
             }
+        }
+    }
+
+    /// Play history, revealed by scrolling up past the top of the queue.
+    @ViewBuilder
+    private var historyView: some View {
+        if isLoadingHistory {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Loading history…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .listRowSeparator(.hidden)
+        } else if !playedHistory.isEmpty {
+            Section {
+                ForEach(playedHistory, id: \.id) { track in
+                    Button {
+                        Task { await playFromHistory(track) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            trackRow(track, showDuration: true)
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.footnote)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(CiderPressableButtonStyle())
+                }
+            } header: {
+                Text("Recently played")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.secondary)
+            }
+        } else if didTryHistory {
+            Text("No earlier tracks in this queue")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .listRowSeparator(.hidden)
+        }
+    }
+
+    private func loadHistoryIfNeeded() async {
+        guard !isLoadingHistory, playedHistory.isEmpty else { return }
+        isLoadingHistory = true
+        defer { isLoadingHistory = false }
+
+        didTryHistory = true
+        do {
+            self.playedHistory = try await Queue(tracks: []).fetchHistory(device: device)
+        } catch {
+            print("[QUEUE] history failed: \(error)")
+            self.playedHistory = []
+        }
+    }
+
+    /// Jumping back into history is a queue jump to an absolute index.
+    private func playFromHistory(_ track: Track) async {
+        guard let position = try? await device.queueIndex(of: track) else { return }
+        do {
+            let path: String = device.useV2 ? "queue/jump" : "playback/queue/change-to-index"
+            _ = try await device.sendRequest(endpoint: path, method: "POST", body: ["index": position])
+            await self.fetchQueueItems()
+            self.playedHistory = []
+            self.didTryHistory = false
+        } catch {
+            print(error)
         }
     }
 
