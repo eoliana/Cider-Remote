@@ -1,0 +1,99 @@
+name: Build unsigned IPA (Cider 4.x)
+
+on:
+  push:
+    branches: [main, v4]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build IPA
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          echo "installed:"
+          ls /Applications | grep -i xcode || true
+          sudo xcode-select -s /Applications/Xcode_26.app 2>/dev/null \
+            || sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | tail -1)"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+
+      - name: Resolve SwiftPM packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "Cider Remote.xcodeproj" \
+            -scheme "Cider Remote"
+
+      # The app + widget share an App Group via entitlements. An unsigned build
+      # cannot carry those, so compile with signing disabled and let the user's
+      # own signing step / AltStore / SideStore apply entitlements at install.
+      - name: Build unsigned (device, no signing)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "Cider Remote.xcodeproj" \
+            -scheme "Cider Remote" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DD \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO \
+            | tee build/xcodebuild.log
+
+      - name: Assemble IPA
+        run: |
+          set -euo pipefail
+          APP=$(find build/DD/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          test -n "$APP"
+          echo "app=$APP"
+          # Drop the widget extension: it needs the shared App Group to run, so
+          # an unsigned IPA carrying it just installs a dead PlugIn.
+          rm -rf "$APP/PlugIns"
+          mkdir -p build/Payload
+          rm -rf build/Payload/*.app
+          cp -R "$APP" build/Payload/
+          (cd build && zip -qry ../Cider-Remote-v4-unsigned.ipa Payload)
+          ls -la Cider-Remote-v4-unsigned.ipa
+          unzip -l Cider-Remote-v4-unsigned.ipa | head -20
+
+      - name: Verify payload
+        run: |
+          set -euo pipefail
+          unzip -o -q Cider-Remote-v4-unsigned.ipa -d verify
+          BIN=$(find verify/Payload -maxdepth 1 -name '*.app' -type d)
+          MAIN=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$BIN/Info.plist")
+          echo "bundle=$BIN main=$MAIN"
+          test -f "$BIN/$MAIN"
+          # Cider-4 transport markers. These are the strings that only exist in
+          # the v4 branch: /api/v2 prefix + the v2 REST verbs + amapi/run-v3.
+          # If they are missing the build silently shipped the v2.x app.
+          MISSING=0
+          for s in "amapi/run-v3" "playback/play-href" "playback/add-later" "/api/" "apptoken" ; do
+            N=$(strings -a "$BIN/$MAIN" | grep -c -- "$s" || true)
+            printf '%-24s %s\n' "$s" "$N"
+            [ "$N" -gt 0 ] || MISSING=1
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            echo "::error::v4 transport markers missing from the built binary"
+            exit 1
+          fi
+          # Prove it is NOT the old v2.x app: the v1-only endpoints must be gone.
+          echo "--- legacy v1 endpoints (expected 0 on a v4 build) ---"
+          for s in "playback/play-item-href" "playback/queue/clear-queue" "playback/play-later" ; do
+            printf '%-30s %s\n' "$s" "$(strings -a "$BIN/$MAIN" | grep -c -- "$s" || true)"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cider-Remote-v4-unsigned-ipa
+          path: Cider-Remote-v4-unsigned.ipa
+          if-no-files-found: error
